@@ -7285,9 +7285,9 @@ dependencies = [
 
 [[package]]
 name = "transcribe-cpp"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5134e51fd0cd73fc024b8004c495d96ec1fa5d89c5e341482fd60d82483002a"
+checksum = "2f06368bb32251b5e93ceb8cae2d6ba9adff6a51693c7ce108449e65522b05c6"
 dependencies = [
  "log",
  "thiserror 2.0.18",
@@ -7296,9 +7296,9 @@ dependencies = [
 
 [[package]]
 name = "transcribe-cpp-sys"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98c3d32764dc7ae892274022d52d369e92e1e765e403e56daaa3fe8fdbe18443"
+checksum = "fedfadb42719d92e58a2c340ccfb6ef327ac1b846fc1d4716b65384a330513a6"
 dependencies = [
  "cmake",
  "serde_json",
@@ -9161,3 +9161,13 @@ dependencies = [
  "syn 2.0.117",
  "winnow 0.7.14",
 ]
+
+[[patch.unused]]
+name = "transcribe-cpp"
+version = "0.2.3"
+source = "git+https://github.com/luantak/transcribe.cpp?rev=a2b3e9ed68c1dc9ec08475d41e33db34442f7c5f#a2b3e9ed68c1dc9ec08475d41e33db34442f7c5f"
+
+[[patch.unused]]
+name = "transcribe-cpp-sys"
+version = "0.2.3"
+source = "git+https://github.com/luantak/transcribe.cpp?rev=a2b3e9ed68c1dc9ec08475d41e33db34442f7c5f#a2b3e9ed68c1dc9ec08475d41e33db34442f7c5f"
