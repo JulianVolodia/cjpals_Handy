@@ -43,11 +43,16 @@ const STREAM_FINALIZE_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How much audio to buffer before picking a language for an auto-detect
 /// stream constrained to [`AppSettings::allowed_languages`] (see
-/// [`identify_language_by_trial`]). Long enough to usually cover a first
-/// word at normal speaking pace, short enough to keep the stream feeling
-/// instant — the buffered audio is replayed into the stream immediately
-/// after the trial, so this is pure added latency on the very first word.
-const LANGUAGE_TRIAL_AUDIO_MS: usize = 700;
+/// [`identify_language_by_trial`]). The buffered audio is replayed into the
+/// stream immediately after the trial, so this is pure added latency before
+/// the first word appears — but too short and a quick press-and-hold
+/// finalizes before enough audio accumulates for the trial to have an
+/// opinion (empty/near-empty `Token::p` data), silently falling back to
+/// fully unconstrained auto-detect for exactly that utterance. 1200ms
+/// comfortably covers a full first word (or two short ones) at normal
+/// speaking pace, trading a bit of latency for the trial actually having
+/// something to decide on.
+const LANGUAGE_TRIAL_AUDIO_MS: usize = 1200;
 /// transcribe-cpp streams run at a fixed 16 kHz mono input rate.
 const LANGUAGE_TRIAL_AUDIO_SAMPLES: usize = 16_000 * LANGUAGE_TRIAL_AUDIO_MS / 1000;
 
