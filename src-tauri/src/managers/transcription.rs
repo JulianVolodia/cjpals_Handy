@@ -1006,35 +1006,18 @@ impl TranscriptionManager {
                             Err(_) => break,
                         }
                     }
-                    // A trial that can't decide (too little buffered audio —
-                    // e.g. a very short press-and-hold that finalizes before
-                    // `LANGUAGE_TRIAL_AUDIO_SAMPLES` is reached, or a
-                    // non-token-confidence family) must NOT fall through to
-                    // fully unconstrained auto-detect: that silently drops
-                    // the allowlist for exactly the utterances too short to
-                    // confidently identify, and is the inconsistent
-                    // "sometimes a random language shows up" behavior the
-                    // allowlist exists to prevent. Default to the first
-                    // allowed candidate instead — still a guess, but one
-                    // that honors the user's allowlist.
-                    let winner = identify_language_by_trial(session, &trial_pcm, &candidates)
-                        .unwrap_or_else(|| {
-                            debug!(
-                                "Language trial undecided ({} buffered samples); \
-                                 defaulting to first allowed candidate '{}'",
-                                trial_pcm.len(),
-                                candidates[0]
-                            );
-                            candidates[0].clone()
-                        });
-                    let (task, target_language) = cpp_translation_task(
-                        settings.translate_to_english,
-                        supports_translate,
-                        Some(winner.as_str()),
-                    );
-                    run_options.language = Some(winner);
-                    run_options.task = task;
-                    run_options.target_language = target_language;
+                    if let Some(winner) =
+                        identify_language_by_trial(session, &trial_pcm, &candidates)
+                    {
+                        let (task, target_language) = cpp_translation_task(
+                            settings.translate_to_english,
+                            supports_translate,
+                            Some(winner.as_str()),
+                        );
+                        run_options.language = Some(winner);
+                        run_options.task = task;
+                        run_options.target_language = target_language;
+                    }
                     if !trial_pcm.is_empty() {
                         primed_cmds.push_front(StreamCmd::Feed(trial_pcm));
                     }
