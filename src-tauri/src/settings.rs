@@ -431,6 +431,13 @@ pub struct AppSettings {
     pub translate_to_english: bool,
     #[serde(default = "default_selected_language")]
     pub selected_language: String,
+    /// Languages `selected_language == "auto"` is allowed to resolve to,
+    /// via a short forced-language trial decode per candidate at the start
+    /// of each stream (see `identify_language_by_trial` in
+    /// managers/transcription.rs). Empty means unrestricted auto-detect.
+    /// Ignored when `selected_language` names a concrete language.
+    #[serde(default)]
+    pub allowed_languages: Vec<String>,
     #[serde(default = "default_overlay_position")]
     pub overlay_position: OverlayPosition,
     #[serde(default = "default_debug_mode")]
@@ -951,6 +958,7 @@ pub fn get_default_settings() -> AppSettings {
         selected_output_device: None,
         translate_to_english: false,
         selected_language: "auto".to_string(),
+        allowed_languages: Vec::new(),
         overlay_position: default_overlay_position(),
         debug_mode: false,
         log_level: default_log_level(),

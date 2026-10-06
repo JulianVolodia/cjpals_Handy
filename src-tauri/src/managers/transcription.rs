@@ -13,6 +13,7 @@ use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -22,7 +23,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_specta::Event;
 use transcribe_cpp::{
     Backend, Feature, Model, ModelOptions, RunExtension, RunOptions, Session, StreamOptions, Task,
-    WhisperRunOptions,
+    TimestampKind, WhisperRunOptions,
 };
 use transcribe_rs::{
     onnx::{
@@ -39,6 +40,16 @@ use transcribe_rs::{
 
 const STREAM_PERF_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_FINALIZE_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How much audio to buffer before picking a language for an auto-detect
+/// stream constrained to [`AppSettings::allowed_languages`] (see
+/// [`identify_language_by_trial`]). Long enough to usually cover a first
+/// word at normal speaking pace, short enough to keep the stream feeling
+/// instant — the buffered audio is replayed into the stream immediately
+/// after the trial, so this is pure added latency on the very first word.
+const LANGUAGE_TRIAL_AUDIO_MS: usize = 700;
+/// transcribe-cpp streams run at a fixed 16 kHz mono input rate.
+const LANGUAGE_TRIAL_AUDIO_SAMPLES: usize = 16_000 * LANGUAGE_TRIAL_AUDIO_MS / 1000;
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
@@ -937,24 +948,10 @@ impl TranscriptionManager {
             &languages,
             supports_translate,
         );
-        let output_language = resolve_output_language_evidence(
-            &settings,
-            run_plan.language.as_deref(),
-            &languages,
-            run_plan.target_language.as_deref() == Some("en"),
-        );
-        let run_options = RunOptions {
-            task: run_plan.task,
-            language: run_plan.language,
-            target_language: run_plan.target_language,
-            ..Default::default()
-        };
-
         // Run the stream on the held session. The Stream borrows the session
         // (and thus the engine) for its lifetime, so the feed/finalize loop
         // lives in a labeled block — when it exits, the borrow is released and
         // the engine can be moved into return_engine().
-        let mut preview_script = PreviewScript::new(settings.chinese_script, &output_language);
         let mut finalize_reply: Option<mpsc::Sender<Option<FinalizedStreamText>>> = None;
         let mut finalize_result: Option<Option<FinalizedStreamText>> = None;
         let stream_started = 'stream: {
@@ -967,6 +964,73 @@ impl TranscriptionManager {
             // `Stream` borrows `session` mutably for its lifetime, so we can't
             // call `session.model()` once it exists.
             let backend = session.model().backend();
+
+            let mut run_options = RunOptions {
+                task: run_plan.task,
+                language: run_plan.language,
+                target_language: run_plan.target_language,
+                ..Default::default()
+            };
+
+            // Commands pulled off `rx` ahead of the main loop below — either a
+            // synthetic Feed carrying the audio buffered for a language trial
+            // (fed into the stream before anything else), or a real command
+            // that arrived early while we were buffering for one.
+            let mut primed_cmds: VecDeque<StreamCmd> = VecDeque::new();
+
+            // Auto-detect constrained to an allowlist: transcribe-cpp's public
+            // API has no decode-time language-token masking (see CLAUDE.md),
+            // so instead we buffer the first stretch of audio, run a forced
+            // trial decode per allowed language, and start the real stream
+            // already pinned to whichever trial was most confident. Only
+            // engages when the user left the model on auto *and* configured
+            // an allowlist; an unrestricted auto stream behaves exactly as
+            // before.
+            if run_options.language.is_none() {
+                let candidates = nemotron_trial_candidates(&settings.allowed_languages, &languages);
+                if !candidates.is_empty() {
+                    let mut trial_pcm: Vec<f32> = Vec::with_capacity(LANGUAGE_TRIAL_AUDIO_SAMPLES);
+                    while trial_pcm.len() < LANGUAGE_TRIAL_AUDIO_SAMPLES {
+                        match rx.recv() {
+                            Ok(StreamCmd::Feed(pcm)) => {
+                                self.touch_activity();
+                                trial_pcm.extend_from_slice(&pcm);
+                            }
+                            Ok(other) => {
+                                // Finalize/Cancel arrived before we had enough
+                                // audio to trial — stop buffering, keep what
+                                // we have, and replay this command afterward.
+                                primed_cmds.push_back(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    if let Some(winner) =
+                        identify_language_by_trial(session, &trial_pcm, &candidates)
+                    {
+                        let (task, target_language) = cpp_translation_task(
+                            settings.translate_to_english,
+                            supports_translate,
+                            Some(winner.as_str()),
+                        );
+                        run_options.language = Some(winner);
+                        run_options.task = task;
+                        run_options.target_language = target_language;
+                    }
+                    if !trial_pcm.is_empty() {
+                        primed_cmds.push_front(StreamCmd::Feed(trial_pcm));
+                    }
+                }
+            }
+
+            let output_language = resolve_output_language_evidence(
+                &settings,
+                run_options.language.as_deref(),
+                &languages,
+                run_options.target_language.as_deref() == Some("en"),
+            );
+            let mut preview_script = PreviewScript::new(settings.chinese_script, &output_language);
 
             // StreamOptions::default() uses CommitPolicy::Auto and lets the
             // family pick its own streaming strategy (no family-specific ext).
@@ -986,7 +1050,14 @@ impl TranscriptionManager {
             );
 
             let mut perf = StreamPerf::new();
-            while let Ok(cmd) = rx.recv() {
+            loop {
+                let cmd = match primed_cmds.pop_front() {
+                    Some(cmd) => cmd,
+                    None => match rx.recv() {
+                        Ok(cmd) => cmd,
+                        Err(_) => break,
+                    },
+                };
                 match cmd {
                     StreamCmd::Feed(pcm) => {
                         self.touch_activity();
@@ -1766,6 +1837,91 @@ fn transcribe_cpp_run_plan(
     }
 }
 
+/// The settings-configured language allowlist, narrowed to codes the loaded
+/// model actually advertises — an allowed code the model doesn't support
+/// would only ever fail as an [`identify_language_by_trial`] candidate.
+fn nemotron_trial_candidates(allowed_languages: &[String], model_languages: &[String]) -> Vec<String> {
+    allowed_languages
+        .iter()
+        .filter(|lang| model_languages.iter().any(|l| l == *lang))
+        .cloned()
+        .collect()
+}
+
+/// Pick the most likely language for `pcm` out of `candidates` by running a
+/// short forced-language trial decode per candidate and comparing average
+/// per-token confidence (`Token::p`, a softmax probability the parakeet
+/// decoder reports — see transcribe-cpp's `result.rs`). This stands in for
+/// true constrained auto-detect (decode-time language-token masking), which
+/// transcribe-cpp's public API does not expose: instead of restricting what
+/// the model can decode, we ask it to decode the same audio once per
+/// candidate language and keep whichever attempt it was most confident in.
+///
+/// Returns `None` when no candidate produced any token confidence (empty
+/// audio, a non-token-confidence family, or every trial erroring) — callers
+/// should fall back to the model's own unconstrained auto-detect in that
+/// case rather than guessing.
+fn identify_language_by_trial(
+    session: &mut Session,
+    pcm: &[f32],
+    candidates: &[String],
+) -> Option<String> {
+    if pcm.is_empty() || candidates.is_empty() {
+        return None;
+    }
+    if candidates.len() == 1 {
+        return Some(candidates[0].clone());
+    }
+
+    let mut best: Option<(String, f32)> = None;
+    for candidate in candidates {
+        let options = RunOptions {
+            task: Task::Transcribe,
+            timestamps: TimestampKind::Token,
+            language: Some(candidate.clone()),
+            ..Default::default()
+        };
+        let transcript = match session.run(pcm, &options) {
+            Ok(t) => t,
+            Err(e) => {
+                debug!(
+                    "Language trial for '{}' failed, skipping candidate: {}",
+                    candidate, e
+                );
+                continue;
+            }
+        };
+        let scores: Vec<f32> = transcript
+            .tokens
+            .iter()
+            .map(|t| t.p)
+            .filter(|p| p.is_finite())
+            .collect();
+        if scores.is_empty() {
+            continue;
+        }
+        let avg_p = scores.iter().sum::<f32>() / scores.len() as f32;
+        debug!(
+            "Language trial '{}': avg_p={:.4} over {} tokens, text={:?}",
+            candidate,
+            avg_p,
+            scores.len(),
+            transcript.text
+        );
+        if best.as_ref().is_none_or(|(_, best_p)| avg_p > *best_p) {
+            best = Some((candidate.clone(), avg_p));
+        }
+    }
+
+    best.map(|(language, avg_p)| {
+        info!(
+            "Language trial picked '{}' (avg_p={:.4}) out of {:?}",
+            language, avg_p, candidates
+        );
+        language
+    })
+}
+
 fn post_process_transcription_text(
     raw: String,
     settings: &AppSettings,
@@ -2238,6 +2394,21 @@ mod tests {
 
     fn languages(codes: &[&str]) -> Vec<String> {
         codes.iter().map(|code| (*code).to_string()).collect()
+    }
+
+    #[test]
+    fn nemotron_trial_candidates_drops_codes_the_model_does_not_advertise() {
+        let allowed = languages(&["en-US", "pl-PL", "unknown-code"]);
+        let supported = languages(&["en-US", "pl-PL", "de-DE"]);
+        assert_eq!(
+            nemotron_trial_candidates(&allowed, &supported),
+            languages(&["en-US", "pl-PL"])
+        );
+    }
+
+    #[test]
+    fn nemotron_trial_candidates_empty_allowlist_is_unrestricted_auto() {
+        assert!(nemotron_trial_candidates(&[], &languages(&["en-US", "pl-PL"])).is_empty());
     }
 
     #[test]
