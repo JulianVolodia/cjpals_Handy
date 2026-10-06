@@ -251,19 +251,32 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({
         >
           <div className="flex flex-wrap gap-1.5">
             {(supportedLanguages ?? []).map((code) => {
-              const active = allowedLanguages.includes(code);
+              const priority = allowedLanguages.indexOf(code);
+              const active = priority !== -1;
               return (
                 <button
                   key={code}
                   type="button"
                   onClick={() => toggleAllowedLanguage(code)}
                   disabled={isUpdating("allowed_languages")}
-                  className={`px-2 py-1 text-xs font-semibold rounded border transition-colors duration-150 ${
+                  title={
+                    active
+                      ? t("settings.general.language.allowlist.priorityTooltip", {
+                          n: priority + 1,
+                        })
+                      : undefined
+                  }
+                  className={`px-2 py-1 text-xs font-semibold rounded border transition-colors duration-150 inline-flex items-center gap-1 ${
                     active
                       ? "bg-logo-primary/20 border-logo-primary text-logo-primary"
                       : "bg-mid-gray/10 border-mid-gray/80 hover:border-logo-primary"
                   } ${isUpdating("allowed_languages") ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
                 >
+                  {active && (
+                    <span className="inline-flex items-center justify-center w-4 h-4 text-[10px] rounded-full bg-logo-primary text-background">
+                      {priority + 1}
+                    </span>
+                  )}
                   {getLanguageLabel(code) || code}
                 </button>
               );

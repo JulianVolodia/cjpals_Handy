@@ -1856,6 +1856,16 @@ fn nemotron_trial_candidates(
         .collect()
 }
 
+/// Below this gap in average token confidence, two candidates are
+/// indistinguishable noise rather than a real decision — e.g. a short word
+/// like "Hello" transliterates into Polish phonemes about as confidently as
+/// it decodes as English (observed: en-US=0.9672 vs pl-PL=0.9677 for the
+/// same single word). Picking by raw max in that regime is a coin flip;
+/// [`identify_language_by_trial`] instead breaks a within-margin tie by the
+/// candidate's position in `allowed_languages` (the user's own priority
+/// order — see [`AppSettings::allowed_languages`]).
+const LANGUAGE_TRIAL_TIE_MARGIN: f32 = 0.02;
+
 /// Pick the most likely language for `pcm` out of `candidates` by running a
 /// short forced-language trial decode per candidate and comparing average
 /// per-token confidence (`Token::p`, a softmax probability the parakeet
@@ -1863,7 +1873,9 @@ fn nemotron_trial_candidates(
 /// true constrained auto-detect (decode-time language-token masking), which
 /// transcribe-cpp's public API does not expose: instead of restricting what
 /// the model can decode, we ask it to decode the same audio once per
-/// candidate language and keep whichever attempt it was most confident in.
+/// candidate language and keep whichever attempt it was most confident in,
+/// with ties (see [`LANGUAGE_TRIAL_TIE_MARGIN`]) broken by `candidates`
+/// order.
 ///
 /// Returns `None` when no candidate produced any token confidence (empty
 /// audio, a non-token-confidence family, or every trial erroring) — callers
@@ -1881,7 +1893,9 @@ fn identify_language_by_trial(
         return Some(candidates[0].clone());
     }
 
-    let mut best: Option<(String, f32)> = None;
+    // Scored in `candidates` order, so the tie-break below (first candidate
+    // within the margin of the max) naturally respects that priority.
+    let mut scored: Vec<(&String, f32)> = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         let options = RunOptions {
             task: Task::Transcribe,
@@ -1916,17 +1930,20 @@ fn identify_language_by_trial(
             scores.len(),
             transcript.text
         );
-        if best.as_ref().is_none_or(|(_, best_p)| avg_p > *best_p) {
-            best = Some((candidate.clone(), avg_p));
-        }
+        scored.push((candidate, avg_p));
     }
 
-    best.map(|(language, avg_p)| {
+    let max_p = scored.iter().map(|(_, p)| *p).fold(f32::MIN, f32::max);
+    let winner = scored
+        .iter()
+        .find(|(_, p)| *p >= max_p - LANGUAGE_TRIAL_TIE_MARGIN);
+
+    winner.map(|(language, avg_p)| {
         info!(
-            "Language trial picked '{}' (avg_p={:.4}) out of {:?}",
-            language, avg_p, candidates
+            "Language trial picked '{}' (avg_p={:.4}, max={:.4}) out of {:?}",
+            language, avg_p, max_p, candidates
         );
-        language
+        (*language).clone()
     })
 }
 

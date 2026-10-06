@@ -195,7 +195,8 @@
         "auto": "Auto",
         "allowlist": {
           "title": "Auto-detect languages",
-          "description": "With Auto selected, limit automatic detection to the languages you pick here. Leave none selected to detect any supported language."
+          "description": "With Auto selected, limit automatic detection to the languages you pick here. The number shows pick order: when detection is a near-tie, the earlier-picked language wins. Leave none selected to detect any supported language.",
+          "priorityTooltip": "Priority {{n}} — wins a near-tie over later picks"
         }
       },
       "shortcutActivation": {

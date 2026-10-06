@@ -86,7 +86,6 @@ fn identify_language_by_trial(
     candidates: &[String],
 ) -> (Option<String>, Vec<(String, f32, String)>) {
     let mut scored = Vec::new();
-    let mut best: Option<(String, f32)> = None;
     for candidate in candidates {
         let options = RunOptions {
             task: Task::Transcribe,
@@ -113,11 +112,23 @@ fn identify_language_by_trial(
         }
         let avg_p = scores.iter().sum::<f32>() / scores.len() as f32;
         scored.push((candidate.clone(), avg_p, transcript.text));
-        if best.as_ref().is_none_or(|(_, best_p)| avg_p > *best_p) {
-            best = Some((candidate.clone(), avg_p));
-        }
     }
-    (best.map(|(lang, _)| lang), scored)
+
+    // Mirrors LANGUAGE_TRIAL_TIE_MARGIN in managers/transcription.rs: within
+    // the margin of the max, the earliest candidate (the user's priority
+    // order) wins rather than whichever happened to score a hair higher.
+    const TIE_MARGIN: f32 = 0.02;
+    let max_p = scored
+        .iter()
+        .map(|(_, p, _)| *p)
+        .filter(|p| p.is_finite())
+        .fold(f32::MIN, f32::max);
+    let winner = scored
+        .iter()
+        .find(|(_, p, _)| p.is_finite() && *p >= max_p - TIE_MARGIN)
+        .map(|(lang, _, _)| lang.clone());
+
+    (winner, scored)
 }
 
 fn main() -> ExitCode {

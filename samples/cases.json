@@ -1,0 +1,6 @@
+[
+  {"wav": "pl_short.wav", "expected": "pl-PL"},
+  {"wav": "en_short.wav", "expected": "en-US"},
+  {"wav": "pl_tiny.wav", "expected": "pl-PL"},
+  {"wav": "en_tiny.wav", "expected": "en-US"}
+]
