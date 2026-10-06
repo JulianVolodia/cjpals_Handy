@@ -113,6 +113,25 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({
     await resetSetting("selected_language");
   };
 
+  // Auto-detect language allowlist: a short forced-language trial decode
+  // (see `identify_language_by_trial` in managers/transcription.rs) picks
+  // one of these languages at the start of each stream instead of letting
+  // Nemotron auto-detect across every language it supports. Only meaningful
+  // on "Auto" with a model that actually offers more than one language to
+  // narrow down.
+  const allowedLanguages = getSetting("allowed_languages") ?? [];
+  const showAllowlist =
+    selectedLanguage === "auto" &&
+    supportsLanguageDetection &&
+    (supportedLanguages?.length ?? 0) > 1;
+
+  const toggleAllowedLanguage = async (code: string) => {
+    const next = allowedLanguages.includes(code)
+      ? allowedLanguages.filter((c) => c !== code)
+      : [...allowedLanguages, code];
+    await updateSetting("allowed_languages", next);
+  };
+
   const handleToggle = () => {
     if (isUpdating("selected_language")) return;
     setIsOpen(!isOpen);
@@ -133,12 +152,13 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({
   };
 
   return (
-    <SettingContainer
-      title={t("settings.general.language.title")}
-      description={t("settings.general.language.description")}
-      descriptionMode={descriptionMode}
-      grouped={grouped}
-    >
+    <>
+      <SettingContainer
+        title={t("settings.general.language.title")}
+        description={t("settings.general.language.description")}
+        descriptionMode={descriptionMode}
+        grouped={grouped}
+      >
       <div className="flex items-center space-x-1">
         <div className="relative" ref={dropdownRef}>
           <button
@@ -221,6 +241,36 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({
           <div className="w-4 h-4 border-2 border-logo-primary border-t-transparent rounded-full animate-spin"></div>
         </div>
       )}
-    </SettingContainer>
+      </SettingContainer>
+      {showAllowlist && (
+        <SettingContainer
+          title={t("settings.general.language.allowlist.title")}
+          description={t("settings.general.language.allowlist.description")}
+          descriptionMode={descriptionMode}
+          grouped={grouped}
+        >
+          <div className="flex flex-wrap gap-1.5">
+            {(supportedLanguages ?? []).map((code) => {
+              const active = allowedLanguages.includes(code);
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  onClick={() => toggleAllowedLanguage(code)}
+                  disabled={isUpdating("allowed_languages")}
+                  className={`px-2 py-1 text-xs font-semibold rounded border transition-colors duration-150 ${
+                    active
+                      ? "bg-logo-primary/20 border-logo-primary text-logo-primary"
+                      : "bg-mid-gray/10 border-mid-gray/80 hover:border-logo-primary"
+                  } ${isUpdating("allowed_languages") ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                >
+                  {getLanguageLabel(code) || code}
+                </button>
+              );
+            })}
+          </div>
+        </SettingContainer>
+      )}
+    </>
   );
 };

@@ -192,7 +192,11 @@
         "description": "Select the language for speech recognition. Auto will automatically determine the language, while selecting a specific language can improve accuracy for that language.",
         "searchPlaceholder": "Search languages...",
         "noResults": "No languages found",
-        "auto": "Auto"
+        "auto": "Auto",
+        "allowlist": {
+          "title": "Auto-detect languages",
+          "description": "With Auto selected, limit automatic detection to the languages you pick here. Leave none selected to detect any supported language."
+        }
       },
       "shortcutActivation": {
         "title": "Shortcut Behavior",

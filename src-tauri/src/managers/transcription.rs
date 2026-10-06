@@ -1840,7 +1840,10 @@ fn transcribe_cpp_run_plan(
 /// The settings-configured language allowlist, narrowed to codes the loaded
 /// model actually advertises — an allowed code the model doesn't support
 /// would only ever fail as an [`identify_language_by_trial`] candidate.
-fn nemotron_trial_candidates(allowed_languages: &[String], model_languages: &[String]) -> Vec<String> {
+fn nemotron_trial_candidates(
+    allowed_languages: &[String],
+    model_languages: &[String],
+) -> Vec<String> {
     allowed_languages
         .iter()
         .filter(|lang| model_languages.iter().any(|l| l == *lang))
